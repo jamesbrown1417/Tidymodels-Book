@@ -1,0 +1,83 @@
+---
+title: "Modeling Basics"
+execute:
+    echo: true
+    message: false
+    warning: false
+author: "James Brown"
+date: "2023-04-03"
+format:
+    html:
+        df-print: default
+        theme: cosmo
+        self-contained: true
+        toc: true
+        toc-depth: 3
+        fig-width: 8
+        fig-height: 6
+editor: visual
+---
+
+In this chapter, we'll introduce the Ames housing data set (De Cock 2011), which we will use in modeling examples throughout this book. Exploratory data analysis, like what we walk through in this chapter, is an important first step in building a reliable model. The data set contains information on 2,930 properties in Ames, Iowa, including columns related to:
+
+-   house characteristics (bedrooms, garage, fireplace, pool, porch, etc.)
+
+-   location (neighborhood)
+
+-   lot information (zoning, shape, size, etc.)
+
+-   ratings of condition and quality
+
+-   sale price
+
+To load the data:
+
+```{r}
+library(tidymodels)
+tidymodels_prefer()
+data(ames)
+```
+
+## Exploring Features of Homes in Ames
+
+Let's start our exploratory data analysis by focusing on the outcome we want to predict: the last sale price of the house (in USD). We can create a histogram to see the distribution of sale prices:
+
+```{r}
+ames |> 
+    ggplot(aes(x = Sale_Price)) +
+    geom_histogram(bins = 50, col = "white")
+```
+
+This plot shows us that the data are right-skewed; there are more inexpensive houses than expensive ones. The median sale price was \$160,000, and the most expensive house was \$755,000. When modeling this outcome, a strong argument can be made that the price should be log-transformed. The advantages of this type of transformation are that no houses would be predicted with negative sale prices and that errors in predicting expensive houses will not have an undue influence on the model. Also, from a statistical perspective, a logarithmic transform may also stabilize the variance in a way that makes inference more legitimate. We can use similar steps to now visualize the transformed data
+
+```{r}
+ames |> 
+    ggplot(aes(x = Sale_Price)) +
+    geom_histogram(bins = 50, col = "white") +
+    scale_x_log10()
+```
+
+While not perfect, this will likely result in better models than using the untransformed data, for the reasons just outlined.
+
+The units of the model coefficients might be more difficult to interpret, as will measures of performance. For example, the root mean squared error (RMSE) is a common performance metric used in regression models. It uses the difference between the observed and predicted values in its calculations. If the sale price is on the log scale, these differences (i.e., the residuals) are also on the log scale. It can be difficult to understand the quality of a model whose RMSE is 0.15 on such a log scale.
+
+Despite these drawbacks, the models used in this book use the log transformation for this outcome. From this point on, the outcome column is prelogged in the ames data frame:
+
+```{r}
+ames <- ames |> mutate(Sale_Price = log10(Sale_Price))
+```
+
+Another important aspect of these data for our modeling is their geographic locations. This spatial information is contained in the data in two ways: a qualitative Neighborhood label as well as quantitative longitude and latitude data.
+
+## Chapter Summary
+
+This chapter introduced the Ames housing data set and investigated some of its characteristics. This data set will be used in later chapters to demonstrate tidymodels syntax. Exploratory data analysis like this is an essential component of any modeling project; EDA uncovers information that contributes to better modeling practice.
+
+The important code for preparing the Ames data set that we will carry forward into subsequent chapters is:
+
+```{r}
+library(tidymodels)
+data(ames)
+ames <- ames |> mutate(Sale_Price = log10(Sale_Price))
+```
+
