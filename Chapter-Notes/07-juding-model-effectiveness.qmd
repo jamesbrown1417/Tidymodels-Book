@@ -289,7 +289,7 @@ Macro-weighted averaging is also available as an option for applying this metric
 roc_auc(hpc_cv, obs, VF, F, M, L, estimator = "macro_weighted")
 ```
 
-Finally, all of these performance metrics can be computed using dplyr groupings. Recall that these data have a column for the resampling groups. We haven’t yet discussed resampling in detail, but notice how we can pass a grouped data frame to the metric function to compute the metrics for each group:
+Finally, all of these performance metrics can be computed using dplyr groupings. Recall that these data have a column for the resampling groups. We haven't yet discussed resampling in detail, but notice how we can pass a grouped data frame to the metric function to compute the metrics for each group:
 
 ```{r}
 hpc_cv |> 
