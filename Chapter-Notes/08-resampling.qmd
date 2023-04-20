@@ -141,9 +141,9 @@ Resampling methods are empirical simulation systems that emulate the process of 
 
 Resampling is conducted only on the training set, the test set is not involved. For each iteration of resampling, the data are partitioned into two subsamples:
 
-- The model is fit with the analysis set.
+-   The model is fit with the analysis set.
 
-- The model is evaluated with the assessment set.
+-   The model is evaluated with the assessment set.
 
 These two subsamples are somewhat analogous to training and test sets. Our language of analysis and assessment avoids confusion with the initial split of the data. These data sets are mutually exclusive. The partitioning scheme used to create the analysis and assessment sets is usually the defining characteristic of the method.
 
@@ -168,9 +168,124 @@ The primary input is the training set data frame as well as the number of folds 
 ```{r}
 set.seed(1001)
 ames_folds <- vfold_cv(ames_train, v = 10)
-ames_folds
+print(ames_folds)
 ```
 
+The column named splits contains the information on how to split the data (similar to the object used to create the initial training/test partition). While each row of splits has an embedded copy of the entire training set, R is smart enough not to make copies of the data in memory.
+The print method inside of the tibble shows the frequency of each: [2107/235] indicates that about two thousand samples are in the analysis set and 235 are in that particular assessment set.
 
+These objects also always contain a character column called id that labels the partition.
 
+To manually retrieve the partitioned data, the analysis() and assessment() functions return the corresponding data frames:
 
+```{r}
+# For the first fold:
+ames_folds$splits[[1]] |> analysis() |> dim()
+```
+
+The tidymodels packages, such as tune, contain high-level user interfaces so that functions like analysis() are not generally needed for day-to-day work. Section 10.3 demonstrates a function to fit a model over these resamples.
+
+There are a variety of cross-validation variations; we’ll go through the most important ones.
+
+### Repeated Cross-Validation
+
+The most important variation on cross-validation is repeated V-fold cross-validation. Depending on data size or other characteristics, the resampling estimate produced by V-fold cross-validation may be excessively noisy. As with many statistical problems, one way to reduce noise is to gather more data. For cross-validation, this means averaging more than V statistics.
+
+To create R repeats of V-fold cross-validation, the same fold generation process is done R times to generate R collections of V partitions. Now, instead of averaging V statistics, $V \times R$ statistics produce the final resampling estimate. Due to the Central Limit Theorem, the summary statistics from each model tend toward a normal distribution, as long as we have a lot of data relative to $V \times R$.
+
+Consider the Ames data. On average, 10-fold cross-validation uses assessment sets that contain roughly 234 properties. If RMSE is the statistic of choice, we can denote that estimate’s standard deviation as $\sigma$. With simple 10-fold cross-validation, the standard error of the mean RMSE is $\sigma / \sqrt{10}$. If this is too noisy, repeats reduce the standard error to $\sigma / \sqrt{10R}$.
+
+Larger numbers of replicates tend to have less impact on the standard error. However, if the baseline value of $\sigma$ is impractically large, the diminishing returns on replication may still be worth the extra computational costs.
+
+To create repeats, invoke vfold_cv() with an additional argument repeats:
+
+```{r}
+vfold_cv(ames_train, v = 10, repeats = 5)
+```
+
+### Leave-One-Out Cross-Validation
+
+One variation of cross-validation is leave-one-out (LOO) cross-validation. If there are $n$ training set samples, $n$ models are fit using $n - 1$ rows of the training set. Each model predicts the single excluded data point. At the end of resampling, the $n$ predictions are pooled to produce a single performance statistic. 
+
+Leave-one-out methods are deficient compared to almost any other method. For anything but pathologically small samples, LOO is computationally excessive, and it may not have good statistical properties. Although the rsample package contains a loo_cv() function, these objects are not generally integrated into the broader tidymodels frameworks.
+
+### Monte Carlo Cross-Validation
+
+Another variant of V-fold cross-validation is Monte Carlo cross-validation. Like V-fold cross-validation, it allocates a fixed proportion of data to the assessment sets. The difference between MCCV and regular cross-validation is that, for MCCV, this proportion of the data is randomly selected each time. This results in assessment sets that are not mutually exclusive. To create these resampling objects:
+
+```{r}
+mc_cv(ames_train, prop = 9/10, times = 20)
+```
+
+### Validation Sets
+
+In Section 5.2, we briefly discussed the use of a validation set, a single partition that is set aside to estimate performance separate from the test set. When using a validation set, the initial available data set is split into a training set, a validation set, and a test set.
+
+Validation sets are often used when the original pool of data is very large. In this case, a single large partition may be adequate to characterize model performance without having to do multiple resampling iterations.
+
+With the rsample package, a validation set is like any other resampling object; this type is different only in that it has a single iteration.
+
+To create a validation set object that uses 3/4 of the data for model fitting:
+
+```{r}
+val_set <- validation_split(ames_train, prop = 3/4)
+val_set
+```
+
+### Bootstrapping
+
+Bootstrap resampling was originally invented as a method for approximating the sampling distribution of statistics whose theoretical properties are intractable (Davison and Hinkley 1997). Using it to estimate model performance is a secondary application of the method.
+
+A bootstrap sample of the training set is a sample that is the same size as the training set but is drawn with replacement. This means that some training set data points are selected multiple times for the analysis set. Each data point has a 63.2% chance of inclusion in the training set at least once. The assessment set contains all of the training set samples that were not selected for the analysis set (on average, with 36.8% of the training set). When bootstrapping, the assessment set is often called the out-of-bag sample.
+
+Using the rsample package, we can create such bootstrap resamples:
+
+```{r}
+bootstraps(ames_train, times = 5)
+```
+
+Bootstrap samples produce performance estimates that have very low variance (unlike cross-validation) but have significant pessimistic bias. This means that, if the true accuracy of a model is 90%, the bootstrap would tend to estimate the value to be less than 90%. The amount of bias cannot be empirically determined with sufficient accuracy. Additionally, the amount of bias changes over the scale of the performance metric. For example, the bias is likely to be different when the accuracy is 90% versus when it is 70%.
+
+The bootstrap is also used inside of many models. For example, the random forest model mentioned earlier contained 1,000 individual decision trees. Each tree was the product of a different bootstrap sample of the training set.
+
+### Rolling Forecasting Origin Resampling
+
+When the data have a strong time component, a resampling method should support modeling to estimate seasonal and other temporal trends within the data. A technique that randomly samples values from the training set can disrupt the model’s ability to estimate these patterns.
+
+Rolling forecast origin resampling (Hyndman and Athanasopoulos 2018) provides a method that emulates how time series data is often partitioned in practice, estimating the model with historical data and evaluating it with the most recent data. For this type of resampling, the size of the initial analysis and assessment sets are specified. The first iteration of resampling uses these sizes, starting from the beginning of the series. The second iteration uses the same data sizes but shifts over by a set number of samples.
+
+To illustrate, a training set of fifteen samples was resampled with an analysis size of eight samples and an assessment set size of three. The second iteration discards the first training set sample and both data sets shift forward by one. 
+
+Here are two different configurations of this method:
+
+-   The analysis set can cumulatively grow (as opposed to remaining the same size). After the first initial analysis set, new samples can accrue without discarding the earlier data.
+
+-   The resamples need not increment by one. For example, for large data sets, the incremental block could be a week or month instead of a day.
+
+For a year’s worth of data, suppose that six sets of 30-day blocks define the analysis set. For assessment sets of 30 days with a 29-day skip, we can use the rsample package to specify:
+
+```{r}
+time_slices <- 
+  tibble(x = 1:365) |> 
+  rolling_origin(initial = 6 * 30, assess = 30, skip = 29, cumulative = FALSE)
+
+data_range <- function(x) {
+  summarize(x, first = min(x), last = max(x))
+}
+
+map_dfr(time_slices$splits, ~   analysis(.x) |> data_range())
+
+map_dfr(time_slices$splits, ~ assessment(.x) |> data_range())
+```
+
+## Estimating Performance
+
+Any of the resampling methods discussed in this chapter can be used to evaluate the modeling process (including preprocessing, model fitting, etc). These methods are effective because different groups of data are used to train the model and assess the model. To reiterate, the process to use resampling is:
+
+1. During resampling, the analysis set is used to preprocess the data, apply the preprocessing to itself, and use these processed data to fit the model.
+
+2. The preprocessing statistics produced by the analysis set are applied to the assessment set. The predictions from the assessment set estimate performance on new data.
+
+This sequence repeats for every resample. If there are B resamples, there are B replicates of each of the performance metrics. The final resampling estimate is the average of these B statistics. If B = 1, as with a validation set, the individual statistics represent overall performance.
+
+Let’s reconsider the previous random forest model contained in the rf_wflow object. The fit_resamples() function is analogous to fit(), but instead of having a data argument, fit_resamples() has resamples, which expects an rset object like the ones shown in this chapter. The possible interfaces to the function are:
