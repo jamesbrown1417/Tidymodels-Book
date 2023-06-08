@@ -311,8 +311,7 @@ The control arguments include:
 
 -   save_pred: A logical for saving the assessment set predictions.
 
-For our example, let’s save the predictions in order to visualize the model fit and residuals:
-
+For our example, let's save the predictions in order to visualize the model fit and residuals:
 
 ```{r}
 keep_pred <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
@@ -371,7 +370,7 @@ assess_res |>
   ylab("Predicted")
 ```
 
-There are two houses in the training set with a low observed sale price that are significantly overpredicted by the model. Which houses are these? Let’s find out from the assess_res result:
+There are two houses in the training set with a low observed sale price that are significantly overpredicted by the model. Which houses are these? Let's find out from the assess_res result:
 
 ```{r}
 over_predicted <-
@@ -389,7 +388,7 @@ ames_train |>
 
 Identifying examples like these with especially poor performance can help us follow up and investigate why these specific predictions are so poor.
 
-Let’s move back to the homes overall. How can we use a validation set instead of cross-validation? From our previous rsample object:
+Let's move back to the homes overall. How can we use a validation set instead of cross-validation? From our previous rsample object:
 
 ```{r}
 val_res <- rf_wflow |> fit_resamples(resamples = val_set)
@@ -404,5 +403,167 @@ In these analyses, the resampling results are very close to the test set results
 
 ## Parallel Processing
 
-The models created during resampling are independent of one another. Computations of this kind are sometimes called embarrassingly parallel; each model could be fit simultaneously without issues.25 The tune package uses the foreach package to facilitate parallel computations. These computations could be split across processors on the same computer or across different computers, depending on the chosen technology.
+The models created during resampling are independent of one another. Computations of this kind are sometimes called embarrassingly parallel; each model could be fit simultaneously without issues. The tune package uses the foreach package to facilitate parallel computations. These computations could be split across processors on the same computer or across different computers, depending on the chosen technology.
 
+For computations conducted on a single computer, the number of possible worker processes is determined by the parallel package:
+
+```{r}
+# The number of physical cores in the hardware:
+parallel::detectCores(logical = FALSE)
+
+# The number of possible independent processes that can be simultaneously used:  
+parallel::detectCores(logical = TRUE)
+```
+
+The difference between these two values is related to the computer's processor. For example, most Intel processors use hyperthreading, which creates two virtual cores for each physical core. While these extra resources can improve performance, most of the speed-ups produced by parallel processing occur when processing uses fewer than the number of physical cores.
+
+For fit_resamples() and other functions in tune, parallel processing occurs when the user registers a parallel backend package. These R packages define how to execute parallel processing. On Unix and macOS operating systems, one method of splitting computations is by forking threads. To enable this, load the doMC package and register the number of parallel cores with foreach:
+
+Alternatively, a different approach to parallelizing computations uses network sockets. The doParallel package enables this method (usable by all operating systems):
+
+```{r}
+# All operating systems
+library(doParallel)
+
+# Create a cluster object and then register: 
+cl <- makePSOCKcluster(2)
+registerDoParallel(cl)
+
+# Now run fit_resamples()`...
+
+stopCluster(cl)
+```
+
+Another R package that facilitates parallel processing is the future package. Like foreach, it provides a framework for parallelism. This package is used in conjunction with foreach via the doFuture package.
+
+The R packages with parallel backends for foreach start with the prefix "do".
+
+Parallel processing with the tune package tends to provide linear speed-ups for the first few cores. This means that, with two cores, the computations are twice as fast. Depending on the data and model type, the linear speed-up deteriorates after four to five cores. Using more cores will still reduce the time it takes to complete the task; there are just diminishing returns for the additional cores.
+
+Let's wrap up with one final note about parallelism. For each of these technologies, the memory requirements multiply for each additional core used. For example, if the current data set is 2 GB in memory and three cores are used, the total memory requirement is 8 GB (2 for each worker process plus the original). Using too many cores might cause the computations (and the computer) to slow considerably.
+
+## Saving the Resampled Objects
+
+The models created during resampling are not retained. These models are trained for the purpose of evaluating performance, and we typically do not need them after we have computed performance statistics. If a particular modeling approach does turn out to be the best option for our data set, then the best choice is to fit again to the whole training set so the model parameters can be estimated with more data.
+
+While these models created during resampling are not preserved, there is a method for keeping them or some of their components. The extract option of control_resamples() specifies a function that takes a single argument; we'll use x. When executed, x results in a fitted workflow object, regardless of whether you provided fit_resamples() with a workflow. Recall that the workflows package has functions that can pull the different components of the objects (e.g., the model, recipe, etc.).
+
+Let's fit a linear regression model using the recipe we developed in Chapter 8:
+
+```{r}
+ames_rec <-
+    recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + Latitude + Longitude, data = ames_train) |> 
+    step_other(Neighborhood, threshold = 0.01) |> 
+    step_dummy(all_nominal()) |> 
+    step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_")) |> 
+    step_ns(Latitude, Longitude, deg_free = 20)
+
+lm_wflow <- 
+    workflow() |> 
+    add_recipe(ames_rec) |> 
+    add_model(linear_reg() |> set_engine("lm"))
+
+lm_fit <- lm_wflow |> fit(data = ames_train)
+
+# Select the recipe:
+extract_recipe(lm_fit, estimated = TRUE)
+```
+
+We can save the linear model coefficients for a fitted model object from a workflow:
+
+```{r}
+get_model <- function(x) {
+  extract_fit_parsnip(x) |>
+        tidy()
+}
+
+# Test it using: 
+get_model(lm_fit)
+```
+
+Now let's apply this function to the ten resampled fits. The results of the extraction function is wrapped in a list object and returned in a tibble:
+
+```{r}
+ctrl <- control_resamples(extract = get_model)
+
+lm_res <- lm_wflow |> fit_resamples(resamples = ames_folds, control = ctrl)
+lm_res
+```
+
+Now there is a .extracts column with nested tibbles. What do these contain? Let's find out by subsetting.
+
+```{r}
+lm_res$.extracts[[1]]
+
+# To get the results
+lm_res$.extracts[[1]][[1]]
+```
+
+This might appear to be a convoluted method for saving the model results. However, extract is flexible and does not assume that the user will only save a single tibble per resample. For example, the tidy() method might be run on the recipe as well as the model. In this case, a list of two tibbles will be returned.
+
+For our more simple example, all of the results can be flattened and collected using:
+
+```{r}
+all_coef <- map_dfr(lm_res$.extracts, ~ .x[[1]][[1]])
+# Show the replicates for a single predictor:
+filter(all_coef, term == "Year_Built")
+```
+
+Chapters 13 and 14 discuss a suite of functions for tuning models. Their interfaces are similar to fit_resamples() and many of the features described here apply to those functions.
+
+## Chapter Summary
+
+This chapter describes one of the fundamental tools of data analysis, the ability to measure the performance and variation in model results. Resampling enables us to determine how well the model works without using the test set.
+
+An important function from the tune package, called fit_resamples(), was introduced. The interface for this function is also used in future chapters that describe model tuning tools.
+
+The data analysis code, so far, for the Ames data is:
+
+```{r}
+library(tidymodels)
+data(ames)
+ames <- mutate(ames, Sale_Price = log10(Sale_Price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = Sale_Price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+
+ames_rec <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+           Latitude + Longitude, data = ames_train) |>
+  step_log(Gr_Liv_Area, base = 10) |> 
+  step_other(Neighborhood, threshold = 0.01) |> 
+  step_dummy(all_nominal_predictors()) |> 
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") ) |> 
+  step_ns(Latitude, Longitude, deg_free = 20)
+
+lm_model <- linear_reg() |> set_engine("lm")
+
+lm_wflow <- 
+  workflow() |> 
+  add_model(lm_model) |> 
+  add_recipe(ames_rec)
+
+lm_fit <- fit(lm_wflow, ames_train)
+
+rf_model <- 
+  rand_forest(trees = 1000) |> 
+  set_engine("ranger") |> 
+  set_mode("regression")
+
+rf_wflow <- 
+  workflow() |> 
+  add_formula(
+    Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+      Latitude + Longitude) |> 
+  add_model(rf_model) 
+
+set.seed(1001)
+ames_folds <- vfold_cv(ames_train, v = 10)
+
+keep_pred <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
+
+set.seed(1003)
+rf_res <- rf_wflow |> fit_resamples(resamples = ames_folds, control = keep_pred)
+```
